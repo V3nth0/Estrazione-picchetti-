@@ -1,0 +1,71 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user of the application",
+      "type": "object",
+      "properties": {
+        "maxPicchetti": {
+          "type": "number",
+          "description": "Maximum number of picchetti (default 50, max 100)"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "admin"],
+          "description": "User role"
+        },
+        "selectedSectors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of active sectors"
+        }
+      },
+      "required": ["maxPicchetti", "role"]
+    },
+    "Participant": {
+      "title": "Participant",
+      "description": "A person in the extraction list",
+      "type": "object",
+      "properties": {
+        "firstName": {
+          "type": "string",
+          "description": "First name of the participant"
+        },
+        "lastName": {
+          "type": "string",
+          "description": "Last name of the participant"
+        },
+        "assignedNumber": {
+          "type": "number",
+          "description": "The random number assigned to the participant (null if not assigned)"
+        },
+        "teamName": {
+          "type": "string",
+          "description": "Name of the team if the participant belongs to one"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp"
+        }
+      },
+      "required": ["firstName", "lastName", "createdAt"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": {
+        "$ref": "#/entities/User"
+      },
+      "description": "User settings and profile"
+    },
+    "users/{userId}/participants/{participantId}": {
+      "schema": {
+        "$ref": "#/entities/Participant"
+      },
+      "description": "List of participants for a user"
+    }
+  }
+}

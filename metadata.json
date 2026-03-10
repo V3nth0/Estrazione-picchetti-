@@ -1,0 +1,5 @@
+{
+  "name": "Gestione Estrazioni Picchetti",
+  "description": "App per la gestione di estrazioni casuali di partecipanti in settori e picchetti, con modalitÃ  singolo, coppia e squadra.",
+  "requestFramePermissions": []
+}

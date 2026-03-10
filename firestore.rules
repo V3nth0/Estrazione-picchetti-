@@ -1,0 +1,66 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - maxPicchetti: number (required, 1-100)
+    //   - role: string (required, 'user' or 'admin')
+    //   - selectedSectors: list of strings (optional, max 20)
+    //
+    // Collection: users/{userId}/participants
+    // Document ID: {participantId}
+    // Fields:
+    //   - firstName: string (required, 1-50 chars)
+    //   - lastName: string (required, 1-50 chars)
+    //   - assignedNumber: number (optional, 1-100 or null)
+    //   - teamName: string (optional, 1-50 chars)
+    //   - createdAt: timestamp (required, immutable)
+    //
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['maxPicchetti', 'role']) &&
+             data.keys().hasOnly(['maxPicchetti', 'role', 'selectedSectors']) &&
+             data.maxPicchetti is number && data.maxPicchetti >= 1 && data.maxPicchetti <= 100 &&
+             data.role in ['user', 'admin'] &&
+             (!('selectedSectors' in data) || (data.selectedSectors is list && data.selectedSectors.size() <= 20));
+    }
+
+    function isValidParticipant(data) {
+      return data.keys().hasAll(['firstName', 'lastName', 'createdAt']) &&
+             data.keys().hasOnly(['firstName', 'lastName', 'createdAt', 'assignedNumber', 'teamName']) &&
+             data.firstName is string && data.firstName.size() > 0 && data.firstName.size() <= 50 &&
+             data.lastName is string && data.lastName.size() > 0 && data.lastName.size() <= 50 &&
+             data.createdAt is timestamp &&
+             (!('assignedNumber' in data) || data.assignedNumber == null || (data.assignedNumber is number && data.assignedNumber >= 1 && data.assignedNumber <= 100)) &&
+             (!('teamName' in data) || data.teamName == null || (data.teamName is string && data.teamName.size() > 0 && data.teamName.size() <= 50));
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == 'user';
+      allow update: if isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role;
+      
+      match /participants/{participantId} {
+        allow read: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidParticipant(request.resource.data);
+        allow update: if isOwner(userId) && isValidParticipant(request.resource.data) && request.resource.data.createdAt == resource.data.createdAt;
+        allow delete: if isOwner(userId);
+      }
+    }
+  }
+}
