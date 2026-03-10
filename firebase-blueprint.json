@@ -9,6 +9,10 @@
           "type": "number",
           "description": "Maximum number of picchetti (default 50, max 100)"
         },
+        "sectorSize": {
+          "type": "number",
+          "description": "Number of people per sector (5 or 10)"
+        },
         "role": {
           "type": "string",
           "enum": ["user", "admin"],

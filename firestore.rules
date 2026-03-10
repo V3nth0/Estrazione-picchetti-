@@ -10,6 +10,7 @@ service cloud.firestore {
     // Document ID: {userId}
     // Fields:
     //   - maxPicchetti: number (required, 1-100)
+    //   - sectorSize: number (optional, 5 or 10)
     //   - role: string (required, 'user' or 'admin')
     //   - selectedSectors: list of strings (optional, max 20)
     //
@@ -34,20 +35,22 @@ service cloud.firestore {
 
     function isValidUser(data) {
       return data.keys().hasAll(['maxPicchetti', 'role']) &&
-             data.keys().hasOnly(['maxPicchetti', 'role', 'selectedSectors']) &&
+             data.keys().hasOnly(['maxPicchetti', 'role', 'selectedSectors', 'sectorSize']) &&
              data.maxPicchetti is number && data.maxPicchetti >= 1 && data.maxPicchetti <= 100 &&
              data.role in ['user', 'admin'] &&
-             (!('selectedSectors' in data) || (data.selectedSectors is list && data.selectedSectors.size() <= 20));
+             (!('selectedSectors' in data) || (data.selectedSectors is list && data.selectedSectors.size() <= 20)) &&
+             (!('sectorSize' in data) || (data.sectorSize is number && (data.sectorSize == 5 || data.sectorSize == 10)));
     }
 
     function isValidParticipant(data) {
       return data.keys().hasAll(['firstName', 'lastName', 'createdAt']) &&
-             data.keys().hasOnly(['firstName', 'lastName', 'createdAt', 'assignedNumber', 'teamName']) &&
+             data.keys().hasOnly(['firstName', 'lastName', 'createdAt', 'assignedNumber', 'teamName', 'weight']) &&
              data.firstName is string && data.firstName.size() > 0 && data.firstName.size() <= 50 &&
              data.lastName is string && data.lastName.size() > 0 && data.lastName.size() <= 50 &&
              data.createdAt is timestamp &&
              (!('assignedNumber' in data) || data.assignedNumber == null || (data.assignedNumber is number && data.assignedNumber >= 1 && data.assignedNumber <= 100)) &&
-             (!('teamName' in data) || data.teamName == null || (data.teamName is string && data.teamName.size() > 0 && data.teamName.size() <= 50));
+             (!('teamName' in data) || data.teamName == null || (data.teamName is string && data.teamName.size() > 0 && data.teamName.size() <= 50)) &&
+             (!('weight' in data) || data.weight == null || (data.weight is string && data.weight.size() <= 20));
     }
 
     match /users/{userId} {

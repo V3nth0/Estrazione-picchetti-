@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { collection, doc, onSnapshot, setDoc, getDoc, addDoc, deleteDoc, updateDoc, serverTimestamp, query, orderBy, writeBatch } from 'firebase/firestore';
 import { auth, db, loginWithGoogle, logout } from './firebase';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { handleFirestoreError, OperationType } from './utils/firestoreErrorHandler';
-import { LogIn, LogOut, Users, UserPlus, Trash2, RotateCcw, Shuffle, Settings, User as UserIcon, Users as UsersIcon } from 'lucide-react';
+import { LogIn, LogOut, Users, UserPlus, Trash2, RotateCcw, Shuffle, Settings, User as UserIcon, Users as UsersIcon, Download, X, ListOrdered, Trophy } from 'lucide-react';
+import { toBlob } from 'html-to-image';
 
 const SECTOR_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V'];
 
@@ -15,17 +16,19 @@ interface Participant {
   assignedNumber: number | null;
   createdAt: any;
   teamName?: string;
+  weight?: string;
 }
 
 interface UserSettings {
   maxPicchetti: number;
+  sectorSize: number;
   role: string;
   selectedSectors?: string[];
 }
 
 function MainApp({ user }: { user: User }) {
   const [participants, setParticipants] = useState<Participant[]>([]);
-  const [settings, setSettings] = useState<UserSettings>({ maxPicchetti: 50, role: 'user' });
+  const [settings, setSettings] = useState<UserSettings>({ maxPicchetti: 50, sectorSize: 5, role: 'user' });
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [addMode, setAddMode] = useState<'single' | 'pair' | 'team'>('single');
@@ -50,12 +53,34 @@ function MainApp({ user }: { user: User }) {
     position: number;
     teamName?: string;
   }[] | null>(null);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [showRankingModal, setShowRankingModal] = useState(false);
+  const [isSortedByWeight, setIsSortedByWeight] = useState(false);
+  const exportRef = useRef<HTMLDivElement>(null);
+  const rankingExportRef = useRef<HTMLDivElement>(null);
 
-  const numSectors = Math.ceil(settings.maxPicchetti / 5);
+  const parseWeight = (weight?: string) => {
+    if (!weight) return 0;
+    const parsed = parseFloat(weight.replace(',', '.'));
+    return isNaN(parsed) ? 0 : parsed;
+  };
+
+  const numSectors = Math.ceil(settings.maxPicchetti / (settings.sectorSize || 5));
   const availableSectors = SECTOR_LETTERS.slice(0, numSectors);
   const activeSectors = settings.selectedSectors 
     ? availableSectors.filter(s => settings.selectedSectors!.includes(s))
     : availableSectors;
+
+  const handleUpdateSectorSize = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const val = parseInt(e.target.value, 10);
+    try {
+      await updateDoc(doc(db, 'users', user.uid), {
+        sectorSize: val
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}`);
+    }
+  };
 
   const toggleSector = async (sector: string) => {
     const currentSelected = settings.selectedSectors || availableSectors;
@@ -75,9 +100,10 @@ function MainApp({ user }: { user: User }) {
   };
 
   const getSectorInfo = (num: number) => {
+    const sectorSize = settings.sectorSize || 5;
     const index = num - 1;
-    const sectorIndex = Math.floor(index / 5);
-    const position = (index % 5) + 1;
+    const sectorIndex = Math.floor(index / sectorSize);
+    const position = (index % sectorSize) + 1;
     return {
       sector: SECTOR_LETTERS[sectorIndex] || '?',
       position
@@ -95,6 +121,7 @@ function MainApp({ user }: { user: User }) {
         if (!userSnap.exists()) {
           await setDoc(userRef, { 
             maxPicchetti: 50, 
+            sectorSize: 5,
             role: 'user',
             selectedSectors: SECTOR_LETTERS.slice(0, 10)
           });
@@ -221,6 +248,16 @@ function MainApp({ user }: { user: User }) {
     try {
       await updateDoc(doc(db, `users/${user.uid}/participants`, id), {
         assignedNumber: null
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}/participants/${id}`);
+    }
+  };
+
+  const handleUpdateWeight = async (id: string, weight: string) => {
+    try {
+      await updateDoc(doc(db, `users/${user.uid}/participants`, id), {
+        weight: weight
       });
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}/participants/${id}`);
@@ -423,9 +460,9 @@ function MainApp({ user }: { user: User }) {
     
     activeSectors.forEach(sector => {
       const sectorIndex = SECTOR_LETTERS.indexOf(sector);
-      const startNum = sectorIndex * 5 + 1;
+      const startNum = sectorIndex * (settings.sectorSize || 5) + 1;
       const availableInThisSector = [];
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < (settings.sectorSize || 5); i++) {
         const num = startNum + i;
         if (num <= settings.maxPicchetti && !assignedNumbers.has(num)) {
           availableInThisSector.push(num);
@@ -487,6 +524,97 @@ function MainApp({ user }: { user: User }) {
     }
   });
 
+  const exportToPng = async () => {
+    if (!exportRef.current) return;
+    try {
+      const blob = await toBlob(exportRef.current, {
+        backgroundColor: '#ffffff',
+        pixelRatio: 2,
+      });
+      
+      if (!blob) {
+        alert("Errore durante la generazione dell'immagine.");
+        return;
+      }
+      
+      const fileName = 'settori-picchetti.png';
+      const file = new File([blob], fileName, { type: 'image/png' });
+
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+      // Try Web Share API for mobile devices
+      if (isMobile && navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: 'Assegnazione Picchetti',
+          });
+          return; // Success
+        } catch (shareError: any) {
+          console.log('Condivisione annullata o fallita:', shareError);
+          // If user cancelled, do nothing. Otherwise, fallback.
+          if (shareError.name === 'AbortError') return;
+        }
+      }
+
+      // Fallback for desktop or if share fails
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.download = fileName;
+      link.href = url;
+      link.click();
+      
+      // Cleanup
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+    } catch (error) {
+      console.error('Error exporting image:', error);
+      alert('Si è verificato un errore durante l\'esportazione.');
+    }
+  };
+
+  const exportRankingToPng = async () => {
+    if (!rankingExportRef.current) return;
+    try {
+      const blob = await toBlob(rankingExportRef.current, {
+        backgroundColor: '#ffffff',
+        pixelRatio: 2,
+      });
+      
+      if (!blob) {
+        alert("Errore durante la generazione dell'immagine.");
+        return;
+      }
+      
+      const fileName = 'classifica-generale.png';
+      const file = new File([blob], fileName, { type: 'image/png' });
+
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+      if (isMobile && navigator.canShare && navigator.canShare({ files: [file] })) {
+        try {
+          await navigator.share({
+            files: [file],
+            title: 'Classifica Generale',
+          });
+          return;
+        } catch (shareError: any) {
+          console.log('Condivisione annullata o fallita:', shareError);
+          if (shareError.name === 'AbortError') return;
+        }
+      }
+
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.download = fileName;
+      link.href = url;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+    } catch (error) {
+      console.error('Error exporting image:', error);
+      alert('Si è verificato un errore durante l\'esportazione.');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 font-sans">
       <header className="bg-blue-600 text-white shadow-md sticky top-0 z-10">
@@ -527,6 +655,18 @@ function MainApp({ user }: { user: User }) {
                 onChange={handleUpdateMaxPicchetti}
                 className="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition"
               />
+            </div>
+            <div className="flex items-center justify-between mt-4">
+              <label htmlFor="sectorSize" className="text-sm text-gray-600 font-medium">Persone per Settore:</label>
+              <select
+                id="sectorSize"
+                value={settings.sectorSize || 5}
+                onChange={handleUpdateSectorSize}
+                className="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition bg-white"
+              >
+                <option value={5}>5</option>
+                <option value={10}>10</option>
+              </select>
             </div>
             <div className="mt-4 pt-4 border-t border-gray-100">
               <label className="text-sm text-gray-600 font-medium mb-3 block">Settori Attivi (clicca per attivare/disattivare):</label>
@@ -845,17 +985,43 @@ function MainApp({ user }: { user: User }) {
 
           {/* Sectors Grid */}
           <section className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-            <h2 className="text-lg font-semibold mb-6 flex items-center gap-2 text-gray-800">
-              <div className="w-5 h-5 rounded bg-blue-600 text-white flex items-center justify-center text-xs font-bold">A</div>
-              Settori e Picchetti
-            </h2>
+            <div className="flex items-center justify-between mb-6 flex-wrap gap-4">
+              <h2 className="text-lg font-semibold flex items-center gap-2 text-gray-800">
+                <div className="w-5 h-5 rounded bg-blue-600 text-white flex items-center justify-center text-xs font-bold">A</div>
+                Settori e Picchetti
+              </h2>
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={() => setIsSortedByWeight(!isSortedByWeight)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-lg transition font-medium text-sm ${isSortedByWeight ? 'bg-green-600 hover:bg-green-700 text-white' : 'bg-gray-200 hover:bg-gray-300 text-gray-800'}`}
+                >
+                  <ListOrdered className="w-4 h-4" />
+                  {isSortedByWeight ? 'Ordina per Picchetto' : 'Ordina per Peso'}
+                </button>
+                <button
+                  onClick={() => setShowRankingModal(true)}
+                  className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition font-medium text-sm"
+                >
+                  <Trophy className="w-4 h-4" />
+                  Classifica Generale
+                </button>
+                <button
+                  onClick={() => setShowExportModal(true)}
+                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition font-medium text-sm"
+                >
+                  <Download className="w-4 h-4" />
+                  Esporta Immagine
+                </button>
+              </div>
+            </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
               {availableSectors.map((sectorLetter, sIdx) => {
-                const sectorStartNum = sIdx * 5 + 1;
+                const sectorSize = settings.sectorSize || 5;
+                const sectorStartNum = sIdx * sectorSize + 1;
                 // Only show positions up to maxPicchetti
                 const positions = [];
-                for (let i = 1; i <= 5; i++) {
+                for (let i = 1; i <= sectorSize; i++) {
                   const picchettoNum = sectorStartNum + i - 1;
                   if (picchettoNum <= settings.maxPicchetti) {
                     positions.push({ pos: i, num: picchettoNum });
@@ -877,37 +1043,98 @@ function MainApp({ user }: { user: User }) {
                       <span className="text-xs text-gray-500 font-medium">Picchetti {sectorStartNum}-{sectorStartNum + positions.length - 1}</span>
                     </div>
                     <div className="divide-y divide-gray-100 flex-1">
-                      {positions.map(({ pos, num }) => {
-                        const assigned = assignedInSector.filter(a => a.position === pos);
-                        return (
-                          <div key={pos} className="flex items-center p-3 hover:bg-gray-50 transition">
-                            <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-800 font-bold flex items-center justify-center text-sm mr-3 shrink-0">
-                              {pos}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              {assigned.length > 0 ? (
-                                <div className="flex flex-col">
-                                  {assigned.map((a, idx) => (
-                                    <div key={idx} className="flex items-center gap-2">
-                                      <span className="font-semibold text-gray-900 truncate">
-                                        {a.participant.firstName} {a.participant.lastName}
-                                      </span>
-                                      {a.participant.teamName && (
-                                        <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-medium truncate max-w-[100px]">
-                                          {a.participant.teamName}
-                                        </span>
-                                      )}
-                                    </div>
-                                  ))}
-                                  <span className="text-xs text-gray-500">N° {num}</span>
+                      {isSortedByWeight ? (
+                        <>
+                          {[...assignedInSector]
+                            .sort((a, b) => parseWeight(b.participant.weight) - parseWeight(a.participant.weight))
+                            .map((a, idx) => (
+                              <div key={a.participant.id} className="flex items-center p-3 hover:bg-gray-50 transition">
+                                <div className="w-8 h-8 rounded-full bg-green-100 text-green-800 font-bold flex items-center justify-center text-sm mr-3 shrink-0">
+                                  {idx + 1}°
                                 </div>
-                              ) : (
-                                <span className="text-gray-400 italic text-sm">Vuoto (N° {num})</span>
-                              )}
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex flex-col gap-1">
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="flex items-center gap-2 min-w-0">
+                                        <span className="font-semibold text-gray-900 truncate">
+                                          {a.participant.firstName} {a.participant.lastName}
+                                        </span>
+                                        {a.participant.teamName && (
+                                          <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-medium truncate max-w-[100px]">
+                                            {a.participant.teamName}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <div className="flex items-center gap-1 shrink-0">
+                                        <input
+                                          type="text"
+                                          placeholder="Peso"
+                                          value={a.participant.weight || ''}
+                                          onChange={(e) => handleUpdateWeight(a.participant.id, e.target.value)}
+                                          className="w-16 text-right text-sm border-b border-gray-300 focus:border-blue-500 focus:outline-none bg-transparent"
+                                        />
+                                        <span className="text-xs text-gray-500">kg</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          {positions.filter(p => !assignedInSector.some(a => a.position === p.pos)).map(p => (
+                            <div key={`empty-${p.pos}`} className="flex items-center p-3 hover:bg-gray-50 transition">
+                              <div className="w-8 h-8 rounded-full bg-gray-100 text-gray-400 font-bold flex items-center justify-center text-sm mr-3 shrink-0">
+                                -
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <span className="text-gray-400 italic text-sm">Vuoto</span>
+                              </div>
                             </div>
-                          </div>
-                        );
-                      })}
+                          ))}
+                        </>
+                      ) : (
+                        positions.map(({ pos, num }) => {
+                          const assigned = assignedInSector.filter(a => a.position === pos);
+                          return (
+                            <div key={pos} className="flex items-center p-3 hover:bg-gray-50 transition">
+                              <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-800 font-bold flex items-center justify-center text-sm mr-3 shrink-0">
+                                {pos}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                {assigned.length > 0 ? (
+                                  <div className="flex flex-col gap-1">
+                                    {assigned.map((a, idx) => (
+                                      <div key={idx} className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                          <span className="font-semibold text-gray-900 truncate">
+                                            {a.participant.firstName} {a.participant.lastName}
+                                          </span>
+                                          {a.participant.teamName && (
+                                            <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-medium truncate max-w-[100px]">
+                                              {a.participant.teamName}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="flex items-center gap-1 shrink-0">
+                                          <input
+                                            type="text"
+                                            placeholder="Peso"
+                                            value={a.participant.weight || ''}
+                                            onChange={(e) => handleUpdateWeight(a.participant.id, e.target.value)}
+                                            className="w-16 text-right text-sm border-b border-gray-300 focus:border-blue-500 focus:outline-none bg-transparent"
+                                          />
+                                          <span className="text-xs text-gray-500">kg</span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-gray-400 italic text-sm">Vuoto</span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })
+                      )}
                     </div>
                   </div>
                 );
@@ -917,6 +1144,231 @@ function MainApp({ user }: { user: User }) {
 
         </div>
       </main>
+
+      {/* Export Modal */}
+      {showExportModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-gray-100 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col">
+            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-white rounded-t-2xl shrink-0">
+              <h2 className="text-xl font-bold text-gray-800">Esporta Settori</h2>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={exportToPng}
+                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition font-medium"
+                >
+                  <Download className="w-5 h-5" />
+                  Esporta il file
+                </button>
+                <button 
+                  onClick={() => setShowExportModal(false)}
+                  className="p-2 text-gray-500 hover:bg-gray-100 rounded-full transition"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1">
+              <div ref={exportRef} className="bg-white p-8 rounded-xl shadow-sm">
+                <h1 className="text-3xl font-bold text-center text-gray-800 mb-8">Assegnazione Picchetti</h1>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {availableSectors.map((sectorLetter, sIdx) => {
+                    const sectorSize = settings.sectorSize || 5;
+                    const sectorStartNum = sIdx * sectorSize + 1;
+                    const positions = [];
+                    for (let i = 1; i <= sectorSize; i++) {
+                      const picchettoNum = sectorStartNum + i - 1;
+                      if (picchettoNum <= settings.maxPicchetti) {
+                        positions.push({ pos: i, num: picchettoNum });
+                      }
+                    }
+
+                    if (positions.length === 0) return null;
+
+                    const assignedInSector = sectorsMap.get(sectorLetter) || [];
+                    const isActive = activeSectors.includes(sectorLetter);
+
+                    if (!isActive) return null;
+
+                    return (
+                      <div key={sectorLetter} className="border border-gray-200 rounded-xl overflow-hidden flex flex-col bg-white">
+                        <div className="px-4 py-3 border-b bg-gray-50 border-gray-200 flex justify-between items-center">
+                          <h3 className="font-bold text-gray-800 text-lg">
+                            Settore {sectorLetter}
+                          </h3>
+                          <span className="text-sm text-gray-500 font-medium">Picchetti {sectorStartNum}-{sectorStartNum + positions.length - 1}</span>
+                        </div>
+                        <div className="divide-y divide-gray-100 flex-1">
+                          {isSortedByWeight ? (
+                            <>
+                              {[...assignedInSector]
+                                .sort((a, b) => parseWeight(b.participant.weight) - parseWeight(a.participant.weight))
+                                .map((a, idx) => (
+                                  <div key={a.participant.id} className="flex items-center p-3">
+                                    <div className="w-8 h-8 rounded-full bg-green-100 text-green-800 font-bold flex items-center justify-center text-sm mr-3 shrink-0">
+                                      {idx + 1}°
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="flex flex-col gap-1">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <div className="flex items-center gap-2 min-w-0">
+                                            <span className="font-semibold text-gray-900 truncate">
+                                              {a.participant.firstName} {a.participant.lastName}
+                                            </span>
+                                            {a.participant.teamName && (
+                                              <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-medium truncate max-w-[100px]">
+                                                {a.participant.teamName}
+                                              </span>
+                                            )}
+                                          </div>
+                                          <div className="flex items-center gap-1 shrink-0">
+                                            <span className="text-sm font-medium text-gray-700">
+                                              {a.participant.weight ? `${a.participant.weight} kg` : '_______ kg'}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              {positions.filter(p => !assignedInSector.some(a => a.position === p.pos)).map(p => (
+                                <div key={`empty-${p.pos}`} className="flex items-center p-3">
+                                  <div className="w-8 h-8 rounded-full bg-gray-100 text-gray-400 font-bold flex items-center justify-center text-sm mr-3 shrink-0">
+                                    -
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <span className="text-gray-400 italic text-sm">Vuoto</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </>
+                          ) : (
+                            positions.map(({ pos, num }) => {
+                              const assigned = assignedInSector.filter(a => a.position === pos);
+                              return (
+                                <div key={pos} className="flex items-center p-3">
+                                  <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-800 font-bold flex items-center justify-center text-sm mr-3 shrink-0">
+                                    {pos}
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    {assigned.length > 0 ? (
+                                      <div className="flex flex-col gap-1">
+                                        {assigned.map((a, idx) => (
+                                          <div key={idx} className="flex items-center justify-between gap-2">
+                                            <div className="flex items-center gap-2 min-w-0">
+                                              <span className="font-semibold text-gray-900 truncate">
+                                                {a.participant.firstName} {a.participant.lastName}
+                                              </span>
+                                              {a.participant.teamName && (
+                                                <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-medium truncate max-w-[100px]">
+                                                  {a.participant.teamName}
+                                                </span>
+                                              )}
+                                            </div>
+                                            <div className="flex items-center gap-1 shrink-0">
+                                              <span className="text-sm font-medium text-gray-700">
+                                                {a.participant.weight ? `${a.participant.weight} kg` : '_______ kg'}
+                                              </span>
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <span className="text-gray-400 italic text-sm">Vuoto</span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Ranking Modal */}
+      {showRankingModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-gray-100 rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col">
+            <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-white rounded-t-2xl shrink-0">
+              <h2 className="text-xl font-bold text-gray-800">Classifica Generale</h2>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={exportRankingToPng}
+                  className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition font-medium"
+                >
+                  <Download className="w-5 h-5" />
+                  Esporta Classifica
+                </button>
+                <button 
+                  onClick={() => setShowRankingModal(false)}
+                  className="p-2 text-gray-500 hover:bg-gray-100 rounded-full transition"
+                >
+                  <X className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+            
+            <div className="p-6 overflow-y-auto flex-1">
+              <div ref={rankingExportRef} className="bg-white p-8 rounded-xl shadow-sm">
+                <h1 className="text-3xl font-bold text-center text-gray-800 mb-8">Classifica Generale</h1>
+                <div className="overflow-hidden border border-gray-200 rounded-xl">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-gray-50 border-b border-gray-200">
+                        <th className="py-3 px-4 font-semibold text-gray-600 w-16 text-center">Pos</th>
+                        <th className="py-3 px-4 font-semibold text-gray-600">Concorrente</th>
+                        <th className="py-3 px-4 font-semibold text-gray-600">Settore</th>
+                        <th className="py-3 px-4 font-semibold text-gray-600 text-right">Peso</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {[...participants]
+                        .filter(p => p.assignedNumber !== null)
+                        .map(p => {
+                          const info = getSectorInfo(p.assignedNumber!);
+                          return { ...p, sector: info.sector, position: info.position };
+                        })
+                        .sort((a, b) => parseWeight(b.weight) - parseWeight(a.weight))
+                        .map((p, idx) => (
+                          <tr key={p.id} className="hover:bg-gray-50 transition">
+                            <td className="py-3 px-4 text-center">
+                              <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full font-bold text-sm ${idx === 0 ? 'bg-yellow-100 text-yellow-800' : idx === 1 ? 'bg-gray-200 text-gray-800' : idx === 2 ? 'bg-orange-100 text-orange-800' : 'bg-blue-50 text-blue-800'}`}>
+                                {idx + 1}°
+                              </span>
+                            </td>
+                            <td className="py-3 px-4">
+                              <div className="flex items-center gap-2">
+                                <span className="font-semibold text-gray-900">{p.firstName} {p.lastName}</span>
+                                {p.teamName && (
+                                  <span className="text-[10px] bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-medium">
+                                    {p.teamName}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3 px-4">
+                              <span className="text-gray-600 font-medium">Settore {p.sector} (Picchetto {p.assignedNumber})</span>
+                            </td>
+                            <td className="py-3 px-4 text-right">
+                              <span className="font-bold text-gray-900">{p.weight ? `${p.weight} kg` : '-'}</span>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Extraction Result Modal */}
       {lastExtraction && (
